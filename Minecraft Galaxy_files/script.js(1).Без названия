@@ -1,0 +1,1939 @@
+var TILE_SIZE = 400; //размер тайла
+var MAP_SIZE = 10; //размер карты
+var MAX_CITY_SIZE = 400;
+var wrapper; //обертка тайлов и слоев
+var tilesWrap; //тайлы
+var layer; //слой с тайлами
+var layers; //слои
+var map; //карта
+var markerLayer; //слой с маркером-стрелкой
+var moreUi; //дополнительня панель с ui
+var mainUi; //основная панель с ui
+var dayNightToggle = 'day'; //дневной\ночной режимы
+var zonesTiles = false; //режим со слоями\без слоев
+var tiles = new Array(); //кэш тайлов
+var zonestiles = new Array(); //кэш тайлов с зонами
+var coordinates; //координаты на карте
+var loader; //индикатор загрузки
+var server = 1; //сервер
+var world = 0;	//мир
+var worldDim = 0; //порядковый нормер мира на сервере
+var layersList = ['Города', 'Объекты', 'Дома', 'Картинки', 'Биомы', 'Автовайпы', 'Дороги']; //список слоев
+var tabs = {
+			'first' : 'Основное',
+			'second' : 'Инструменты',
+			'auth' : 'Пользователь',
+			'desc' : 'Описание'
+			}; //табы кнопок
+var activeLayers = new Array(); //активные слои
+var loadLayers = false; //загружать\не загружать слои
+var helpTimeout; //ссылка на таймаут подсказок
+var popup; //подсказка
+var lastCoord; //последние координаты слоев
+var wait = true; //ожидание загрузки слоев
+var lock = false; //блокировка перетаскивания
+var notHidePopup = false; //не убирать попап при загрузке новых пользователей
+
+
+//имена кук для сохранения состояния панелей
+var moreUiCookieName = 'more.ui.hidden';
+var playerUiCookieName = 'player.ui.hidden';
+var coordsCookieName = 'coords.ui.hidden';
+var panelCookiePrefix = '.panel.ui.hidden';
+var layerCookiePrefix = 'layer.%s.ui.hidden';
+var zonesLayerCookieName = 'zones.layer.hidden';
+
+function createGoToSpawn(){
+	addMoreUiElement('second', '<div class="ui-block" id="go-to-spawn-ui">' + 
+						'<div class="title"><a href="#" class="button">На спаун<span class="hotkey">[&nbsp;&nbsp;]</span></a></div>' + 
+					'</div>');
+	var title = map.find('#go-to-spawn-ui .title a');
+	title.bind('click', function(){
+		setCenter(0, 0, true);
+		return false;
+	});
+	$(window).bind('keyup', function(event){
+		if(event.keyCode == 32 || event.which == 32){
+			map.find('#go-to-spawn-ui .title a').click();
+		}
+	});
+}
+
+function createMorePanelUi(){
+	map.append('<div id="ui-more" class="ui-more">' + 
+				'<div class="hide-bar"></div>' +
+			'</div>');
+	moreUi = $('#ui-more');
+	
+	moreUi.append('<div class="ui-more-list"></div>');
+	if(getCookie(moreUiCookieName) == 'yes'){
+		moreUi.addClass('ui-more-hide');
+	}
+	
+	$(window).bind('resize', function(){
+		moreUi.height($('body').height());
+		moreUi.find('.hide-bar').height($('body').height());
+		moreUi.find('.ui-more-list').height($('body').height());
+	});
+	$(window).resize();
+	
+	moreUi.find('.hide-bar').bind('click', function(){
+		moreUi.toggleClass('ui-more-hide');
+		if(moreUi.hasClass('ui-more-hide')){
+			setCookie(moreUiCookieName, 'yes');
+		}
+		else{
+			setCookie(moreUiCookieName, 'no');
+		}
+	});
+	
+	$(window).bind('keypress', function(event){
+		if(event.which == 122 || event.keyCode == 122 || event.which == 1103 || event.keyCode == 1103){
+			moreUi.find('.hide-bar').click();
+		}
+	});
+}
+
+function removeMoreUiElement(place){
+	moreUi.find('.' + place).parent().remove();
+}
+
+function addMoreUiElement(place, item){
+	var placeItem = moreUi.find('.' + place);
+	if(placeItem.length == 0){
+		moreUi.find('.ui-more-list').append('<div class="ui-more-block"><div class="ui-more-acc">' + tabs[place] + '</div><div class="ui-more-helper ' + place + '"></div></div>');
+		placeItem = moreUi.find('.' + place);
+		if(getCookie(place + panelCookiePrefix) == 'no'){
+			placeItem.hide();
+			placeItem.prev().addClass('ui-hiden');
+		}
+		
+		placeItem.prev().bind('click', function(){
+			$(this).next().slideToggle('fast', function(){
+				var flag = 'no';
+				if($(this).css('display') == 'block'){
+					flag = 'yes';
+				}
+				setCookie(place + panelCookiePrefix, flag);
+			});
+			$(this).toggleClass('ui-hiden');
+			return false;
+		});
+	}
+	var div = document.createElement('div');
+	$(div).addClass('ui-more-item');
+	$(div).append(item);
+	placeItem.append(div);
+}
+
+function createPaintUi(){
+	addMoreUiElement('second', '<div class="ui-block city-ui" id="city-ui">' + 
+						'<div class="title"><a href="#" class="button">Шаблон города</a></div>' + 
+					'</div>');
+	
+	var title = map.find('#city-ui .title a');
+	var button = title.parent().parent();
+	layers.append('<div id="paint-city-layer" class="layer-more"></div>');
+	var paintLayer = layers.find('#paint-city-layer');
+	
+	title.bind('click', function(){
+		if(button.hasClass('ui-checked')){
+			lock = false;
+			button.removeClass('ui-checked');
+			layer.removeClass('ui-no-drag')
+		}
+		else{
+			moreUi.find('.ui-checked').toggleClass('ui-checked');
+			lock = true;
+			button.addClass('ui-checked');
+			layer.addClass('ui-no-drag')
+		}
+		return false;
+	});
+	
+	var city;
+	var clickPoint;
+	var wrapLeft;
+	var wrapTop;
+	layer.bind('mousedown', function(event){
+		if(lock && button.hasClass('ui-checked')){
+			paintLayer.html('');
+			city = document.createElement('div');
+			$(city).addClass('range').addClass('new-city');
+			wrapLeft = Number(wrapper.css('left').replace('px', ''));
+			wrapTop = Number(wrapper.css('top').replace('px', ''));
+			
+			var left = event.clientX - wrapLeft;
+			var top = event.clientY - wrapTop;
+			clickPoint = {
+							x : event.clientX,
+							y : event.clientY
+						};
+			$(city).css({
+				left : left, 
+				top : top
+			});
+			paintLayer.append(city);
+		}
+	});
+	
+	$(window).bind('mousemove', function(event){
+		if(button.hasClass('ui-checked') && clickPoint){
+			var width = event.clientX - clickPoint.x;
+			var height = event.clientY - clickPoint.y;
+			var left;
+			var top;
+			
+			//Убираем нечетные размеры
+			width = Math.round(width / 2) * 2;
+			height = Math.round(height / 2) * 2;
+			
+			if(width < 0){
+				width = 0 - width;
+				if(width > MAX_CITY_SIZE){
+					width = MAX_CITY_SIZE;
+				}
+				left = clickPoint.x - wrapLeft - width;
+			}
+			else{
+				left = clickPoint.x - wrapLeft;
+				if (width > MAX_CITY_SIZE){
+					width = MAX_CITY_SIZE;
+				}
+			}
+			
+			if(height < 0){
+				height = 0 - height;
+				if(height > MAX_CITY_SIZE){
+					height = MAX_CITY_SIZE;
+				}
+				top = clickPoint.y - wrapTop - height;
+			}
+			else{
+				top = clickPoint.y - wrapTop;
+				if (height > MAX_CITY_SIZE){
+					height = MAX_CITY_SIZE;
+				}
+			}
+			$(city).css({
+				width : width + 'px',
+				left : left + 'px',
+				height : height + 'px',
+				top : top + 'px'
+			});
+		}
+	});
+	
+	$(window).bind('mouseup', function(event){
+		if(lock && button.hasClass('ui-checked') && clickPoint){
+			var chd = $(city).height();
+			var cwd = $(city).width();
+			
+			$(city).bind('mousemove', function(){
+				if(!helpTimeout){
+					var range = $(this);
+					helpTimeout = setTimeout(function(){
+						var left = Number(range.css('left').replace('px', ''));
+						var top = Number(range.css('top').replace('px', ''))
+						var coords = fromPixelToCoords(left, top);
+						var str = 'Центр: ' + 'x : ' + (coords.x + range.height() / 2) + ' z : ' +  (coords.y - range.width() / 2) + '<br/>';
+						str += 'Размеры: ' + range.height() + ' x ' + range.width() + '<br/>';
+						str += 'Приблизительная стоимость установки: <br/>' + (Math.floor((chd*cwd*50)/(100*100)/12.5)*12.5) + ' Gold'
+						popup.html(str);
+						popup.css({
+							left : left + range.width() + 'px',
+							top : top + range.height() + 'px'
+						});
+						notHidePopup = true;
+						popup.show();
+					}, 100);
+				}
+			});
+			$(city).bind('mouseout', function(){
+				if(helpTimeout){
+					clearTimeout(helpTimeout);
+					helpTimeout = null;
+					notHidePopup = false;
+				}
+				popup.hide();
+			});
+			clickPoint = null;
+			popup.css({
+				left : Number($(city).css('left').replace('px', '')) + $(city).width() + 'px',
+				top : Number($(city).css('top').replace('px', '')) + $(city).height() + 'px'
+			});
+			popup.show();
+			popup.html('Приблизительная стоимость установки: <br/>' + (Math.floor((chd*cwd*50)/(100*100)/12.5)*12.5) + ' Gold');
+		}
+	});
+}
+
+function createWorldsUi(){
+	addMoreUiElement('first', '<div class="ui-block worlds-ui" id="worlds-ui">' + 
+					'<div class="title"><a href="#" rel="1" class="button arrow"></a></div>' + 
+					'<div class="drop-list worlds-list">' + 
+					'</div>' + 
+				'</div>');
+
+	var title = map.find('#worlds-ui .title a');
+	title.bind('click', function(){
+		if(!$(this).parent().next().hasClass('ui-drop-list-show')){
+			map.find('.ui-drop-list-show').removeClass('ui-drop-list-show').hide();
+		}
+		$(this).parent().next().toggle();
+		$(this).parent().next().toggleClass('ui-drop-list-show');
+		return false;
+	});
+}
+
+function loadWorlds(){
+	var list = map.find('#worlds-ui .worlds-list');
+	var title = map.find('#worlds-ui .title a');
+	$('#day-night').show();
+	$.get('/planets/' + server, function(data){
+		var worlds = eval(data);
+		list.html('');
+
+		for(var i=0; i<worlds.length;i++){
+			var item = worlds[i];
+			
+
+			var div = document.createElement('div');
+			$(div).addClass('item');
+			var a = document.createElement('a');
+			$(a).addClass('button');
+			if(i == worlds.length-1){
+				$(a).addClass('last');
+			}
+			$(a).html(item.name);
+			$(a).attr('rel', item.id).attr('href', '#').attr('dim', item.dim);
+
+			$(a).bind('click', function(){
+				title.click();
+				world = $(this).attr('rel');
+				worldDim = $(this).attr('dim');
+				title.html($(this).html());
+				markerLayer.html('');
+				reloadTiles(true);
+				loadPlayers(true);
+				if($(this).attr('dim') == 0){
+					$('#day-night').show();
+				}
+				else{
+					$('#day-night').hide();
+				}
+				$(this).parents('.drop-list').find('.selected').removeClass('selected');
+				$(this).parents('.item').addClass('selected');
+				setCenter(0, 0);
+				return false;
+			});
+			if((world && world == item.id) || (!worldDim && item.dim == 0) || (worldDim && item.dim == worldDim)){
+				title.html(item.name);
+				world = item.id;
+				worldDim = item.dim;
+				$(div).addClass('selected');
+				reloadTiles(true);
+			}
+			$(div).append(a);
+			list.append(div);
+		}
+
+	});
+}
+
+function createServersUi(){
+
+	addMoreUiElement('first', '<div class="ui-block servers-ui">' + 
+					'<div class="title"><a href="#" class="button arrow"></a></div>' + 
+					'<div class="drop-list servers-list">' + 
+					'</div>' + 
+				'</div>');
+	var list = map.find('.servers-ui .servers-list');
+	var title = map.find('.servers-ui .title a');
+	title.bind('click', function(){
+		if(!$(this).parent().next().hasClass('ui-drop-list-show')){
+			map.find('.ui-drop-list-show').removeClass('ui-drop-list-show').hide();
+		}
+		$(this).parent().next().toggle();
+		$(this).parent().next().toggleClass('ui-drop-list-show');
+		return false;
+	});
+	
+	createWorldsUi();
+	
+	$.get('/systems/', function(data){
+		var servers = eval(data);
+		for(var i=0;i < servers.length; i++){
+			var item = servers[i];
+			
+			var div = document.createElement('div');
+			$(div).addClass('item');
+			var a = document.createElement('a');
+			$(a).addClass('button');
+			if(i == servers.length-1){
+				$(a).addClass('last');
+			}
+			$(a).html(item.name);
+			$(a).attr('rel', item.id).attr('href', '#').attr('size', item.mapsize).attr('t3d', item.third);
+			
+			$(a).bind('click', function(){
+				title.click();
+				server = $(this).attr('rel');
+				worldDim = 0;
+				MAP_SIZE = $(this).attr('size') / TILE_SIZE + 1;
+				change3DButton(($(this).attr('t3d') == '1'));
+				title.html($(this).html());
+				markerLayer.html('');
+				setCenter(0, 0);
+				loadWorlds();
+				loadPlayers(true);
+				$(this).parents('.drop-list').find('.selected').removeClass('selected');
+				$(this).parents('.item').addClass('selected');
+				
+				return false;
+			});
+			if((i==0 && !server) || (server && item.id == server)){
+				server = item.id;
+				title.html(item.name);
+				title.attr('rel', item.id);
+				$(div).addClass('selected');
+				MAP_SIZE = item.mapsize / TILE_SIZE + 1;
+				change3DButton((item.third == 1));
+			}
+			
+			$(div).append(a);
+			list.append(div);
+		}
+		loadWorlds();
+	});
+}
+
+function change3DButton(bool){
+	if(bool)
+		$('.3d-button').show();
+	else
+		$('.3d-button').hide();
+}
+
+function createLayersUi(){
+	addMoreUiElement('first', '<div class="layer-selector ui-block">' +
+					'<div class="title">' +
+						'<a href="#" class="button arrow">Слои</a>' +
+					'</div>' +
+					'<div class="layers-list drop-list">' +
+					'</div>' +
+				'</div>');
+	var title = map.find('.layer-selector .title a');
+	title.bind('click', function(){
+		if(!$(this).parent().next().hasClass('ui-drop-list-show')){
+			map.find('.ui-drop-list-show').removeClass('ui-drop-list-show').hide();
+		}
+		$(this).parent().next().toggle();
+		$(this).parent().next().toggleClass('ui-drop-list-show');
+		return false;
+	});
+
+	var div;
+	var list = map.find('.layer-selector .layers-list');
+	
+	for(var i=3; i<layersList.length; i++){
+		div = document.createElement('div');
+		$(div).addClass('item');
+		
+		var hotkey = '<span class="hotkey">%s</span>';
+		if(i == 0){
+			hotkey = hotkey.replace('%s', '[C]');
+		}
+		else if(i == 1){
+			hotkey = hotkey.replace('%s', '[O]');
+		}
+		else if (i == 2){
+			hotkey = hotkey.replace('%s', '[H]');
+		}
+		else if(i == 3){
+			hotkey = hotkey.replace('%s', '[P]');
+		}
+		else{
+			hotkey = hotkey.replace('%s', '');
+		}
+		
+		$(div).append('<a rel="' + i + '" href="" class="button">' + layersList[i] + hotkey + '</a>');
+		if(i==layersList.length-1){
+			$(div).find('a').addClass('last');
+		}
+		
+		if(getCookie(layerCookiePrefix.replace('%s', i)) == 'yes' && i != 6){
+			$(div).find('a').addClass('checked');
+			activeLayers[i] = true;
+		}
+		if(i==6){
+			$(div).find('a').bind('click', function(){
+				$(this).toggleClass('checked');
+				if($(this).hasClass('checked')){
+					loadRoads($(this).attr('rel'));
+				}
+				else{
+					clearLayer($(this).attr('rel'));
+					showDesc('');
+				}
+				return false;
+			});
+		}
+		else{
+			$(div).find('a').bind('click', function(){
+				$(this).toggleClass('checked');
+				if(activeLayers[$(this).attr('rel')] == true){
+					setCookie(layerCookiePrefix.replace('%s', $(this).attr('rel')), 'no');
+					activeLayers[$(this).attr('rel')] = false;
+					var flag = false;
+					for(var i=0; i<activeLayers.length; i++){
+						if(activeLayers[i]){
+							flag = true;
+							break;
+						}
+					}
+					loadLayers = flag ? true : false;
+					clearLayer($(this).attr('rel'));
+				}
+				else{
+					setCookie(layerCookiePrefix.replace('%s', $(this).attr('rel')), 'yes');
+					activeLayers[$(this).attr('rel')] = true;
+					lastCoord = null;
+					loadLayers = true;
+					loadNewTiles(true);
+				}
+
+				return false;
+			});
+		}
+		
+		list.append(div);
+	}
+	if(activeLayers.length > 0){
+		loadLayers = true;
+	}
+	
+	layers.append('<div class="layer-more" id="layer44"></div>');
+	$(window).bind('keyup',function(event){
+		var hidePopup = false;
+		/*if(event.which==67 || event.keyCode==67){
+			list.find('a[rel=0]').click();
+			hidePopup = true;
+		}
+		else if(event.which==79 || event.keyCode==79){
+			list.find('a[rel=1]').click();
+			hidePopup = true;
+		}
+		else if(event.which==72 || event.keyCode==72){
+			list.find('a[rel=2]').click();
+			hidePopup = true;
+		}*/
+		if(event.which==80 || event.keyCode==80){
+			list.find('a[rel=3]').click();
+			hidePopup = true;
+		}
+		
+		if(hidePopup){
+			popup.hide();
+		}
+	});
+}
+
+
+
+function createLayers(){
+	for(var i=0; i<layersList.length; i++){
+		layers.append('<div class="layer-more" id="layer' + i + '"></div>');
+	}
+}
+
+function clearLayer(layer){
+	$('#layer' + layer).html('');
+}
+
+function create3dMapButton(){
+	addMoreUiElement('first', '<div class="3d-button ui-block" id="3d-view"><a href="" class="button">3D карта</a></div>');
+	var button = map.find('.3d-button');
+	button.find('a').bind('click', function(){
+		var title = map.find('.servers-ui .title a').html();
+		
+		window.location = 'http://map.minecraft-galaxy.ru/3d/' + title.toLowerCase() + '/map.html';
+		return false;
+	});
+}
+
+function createDayNightSelector(){
+	addMoreUiElement('first', '<div class="day-night ui-block" id="day-night"><a href="" class="button">День</a></div>');
+	var dayNight = map.find('.day-night');
+	dayNight.find('a').bind('click', function(){
+		if(dayNightToggle == 'day'){
+			dayNightToggle = 'night';
+			$(this).html('Ночь');
+		}
+		else{
+			dayNightToggle = 'day';
+			$(this).html('День');
+		}
+		reloadTiles(false);
+		return false;
+	});
+}
+
+function reloadTiles(clearLayers){
+	if(clearLayers){
+		lastCoord = null;
+		for(var i=0; i<layersList.length; i++){
+			layers.find('#layer' + i).html('');
+		}
+		layers.find('#layer44').html('');
+		layers.find('#zones').html('');
+		waipCache = new Array();
+		showDesc('');
+	}
+	tiles = new Array();
+	zonestiles = new Array();
+	tilesWrap.html('');
+	setLocationCoord();
+	loadNewTiles(true);
+	loadMyZones();
+	
+}
+
+var activeWindow = true;
+function createPlayersUi(ui, reload){
+	if(ui){
+		var div = document.createElement('div');
+		var wrap = document.createElement('div');
+		$(div).addClass('players-ui');
+		$(wrap).addClass('players-list').attr('id', 'players-list');
+		$(div).append('<div class="player-bar"></div>');
+		$(div).append(wrap);
+		var bar = $(div).find('.player-bar');
+		if(getCookie(playerUiCookieName) == 'yes'){
+			$(div).addClass('player-ui-hide');
+		}
+		bar.bind('click', function(){
+			$(div).toggleClass('player-ui-hide');
+			if($(div).hasClass('player-ui-hide')){
+				setCookie(playerUiCookieName, 'yes');
+			}
+			else{
+				setCookie(playerUiCookieName, 'no');
+			}
+		});
+		$(window).bind('resize', function(){
+			$(wrap).height(map.height());
+			$(div).find('.player-bar').height(map.height());
+		});
+		$(window).resize();
+		map.append(div);
+
+	}
+	
+	$(window).bind('keypress', function(event){
+		if(event.which == 97 || event.keyCode == 97 || event.which == 1092 || event.keyCode == 1092){
+			bar.click();
+		}
+	});
+			
+	loadPlayers(ui);
+	if(reload){
+		$(window).bind('focus', function(){
+			activeWindow = true;
+			loadPlayers(ui);
+		});
+		$(window).bind('blur', function(){
+			activeWindow = false;
+		});
+		setInterval(function(){
+			if(activeWindow){	
+				loadPlayers(ui);
+			}
+		}, 10000);
+	}
+}
+
+function sIncrease(i, ii){
+	if (i.toUpperCase() > ii.toUpperCase())			
+		return 1;
+	else if (i.toUpperCase() < ii.toUpperCase())	
+		return -1;
+	else				
+		return 0;
+}
+
+function loadPlayers(ui){
+	$.get('/players/' + server + '?d=' + worldDim, function(data){
+		var users = eval(data);
+		var wrap = $('#players-list');
+		wrap.html('');
+		$('#player-markers').html('');
+		if(!notHidePopup){
+			//popup.hide();
+		}
+		
+		var usersArrayHash = new Array();
+		var usersArrayList = new Array();
+		for(var i=0;i<users.length; i++){
+			usersArrayHash[users[i].name] = users[i];
+			usersArrayList.push(users[i].name);
+		}
+		
+		usersArrayList.sort(sIncrease);
+		
+		for(var i=0; i<usersArrayList.length; i++){
+			var u = usersArrayHash[usersArrayList[i]];
+			if(ui && u.x !=0 && u.y != 0 && u.z != 0){
+				var a = document.createElement('a');
+				var item = document.createElement('div');
+				$(a).attr('href', '#').html('<span class="title ' + u.group + '">' + u.name + '</span>');
+				$(a).attr('x', u.x).attr('y', u.y).attr('z', u.z).attr('name', u.name).attr('rel', u.id);
+				$(a).bind('click', function(){
+					setCenter(Number($(this).attr('x')),Number($(this).attr('z')), true);
+					showUser($(this).attr('rel'));
+					return false;
+				});
+				$(item).addClass('item');
+				$(item).append(a);
+				$(wrap).append(item);
+				addMarker(u);
+			}
+			
+		}
+		
+	});
+}
+
+function showUser(id){
+	$.get('/user/' + id, function(data){
+		var u = eval(data);
+		var userName = u.login;
+		if(user.id != 209){
+			userName = '<a target="profile" href="http://forum.minecraft-galaxy.ru/profilemain/' + u.id + '">' + 
+			u.login + '</a>';
+		}
+		var html = '<div class="desc-ui">Ник: ' + userName + '<br/></div>';
+		showDesc(html);
+	})
+}
+
+function createMap(element, full){
+	map = $(element);
+	map.append('<div class="layer"><div class="wrapper"><div class="layers"/><div id="player-markers"></div><div id="tiles"></div><div id="show-marker"></div></div>')
+	map.append('<div class="coordinates">&nbsp;</div><div class="ui-loader"><img src="/img/ajax-loader.gif" width="16" height="16" alt=""/></div>');
+	map.append('<div class="ui-main"><div class="ui-main-list"></div></div>');
+	map.append('<div class="water-mark">made by minecraft galaxy team</div>');
+
+	wrapper = map.find('.wrapper');
+	coordinates = map.find('.coordinates');
+	loader = map.find('.ui-loader');
+	tilesWrap = wrapper.find('#tiles');
+	tilesWrap.html('');
+	layer = map.find('.layer');
+	layers = map.find('.layers');
+	mainUi = map.find('.ui-main');
+	markerLayer = map.find('#show-marker');
+	
+	popup = $(document.createElement('div'));
+	popup.addClass('ui-popup');
+	wrapper.append(popup);
+	
+	if(full){
+		$(window).bind('resize', function(){
+			map.width($('body').width());
+			map.height($('body').height());
+		});
+	}
+	$(window).bind('resize', function(){
+		$('#back-light').width($('body').width());
+		$('#back-light').height($('body').height());
+		layer.width(map.width());
+		layer.height(map.height());
+		coordinates.css({left : (map.width() / 2 - 50) + 'px'});
+		loader.css({left : (map.width() / 2 - 80) + 'px'});
+	});
+	$(window).resize();
+
+	createLayers();
+	
+	layer.bind('dblclick', function(event){
+		if(!lock){
+			var coords = getCoords(event);
+			prompt('Используйте этот текст для вставки ссылки в свое сообщение','[map s=' + server +  ' w=' + world + ' d=' + worldDim +  ' x=' + coords.x + ' y=' + coords.y + ']');
+		}
+	});
+	
+	
+	if(getCookie(coordsCookieName) == 'yes' || !full){
+		coordinates.hide();
+	}
+	
+	/*for(var i=0;i<layersList.length;i++){
+		if(getCookie(layerCookiePrefix.replace('%s', i)) == 'yes'){
+			activeLayers[i] = true;
+			loadLayers = true;
+		}
+	}*/
+	
+	$(window).bind('keypress', function(event){
+		if(event.which == 100 || event.keyCode == 100 || event.which == 1074 || event.keyCode == 1074){
+			//if(selectedRange && confirm("Точно удалить?")){
+				moreUi.find('#remove-zone').click();
+			//}
+		}
+	});
+	
+	$(window).bind('keyup', function(event){
+		if(full){
+			var pressed = false;
+			if(event.keyCode == 37 || event.which == 37){
+				var left = Number(wrapper.css('left').replace('px', ''));
+				wrapper.css({left : (left + TILE_SIZE) + 'px'});
+				pressed = true;
+			}
+			if(event.keyCode == 38 || event.which == 38){
+				var top = Number(wrapper.css('top').replace('px', ''));
+				wrapper.css({top : (top + TILE_SIZE) + 'px'});
+				pressed = true;
+			}
+			if(event.keyCode == 39 || event.which == 39){
+				var left = Number(wrapper.css('left').replace('px', ''));
+				wrapper.css({left : (left - TILE_SIZE) + 'px'});
+				pressed = true;
+			}
+			if(event.keyCode == 40 || event.which == 40){
+				var top = Number(wrapper.css('top').replace('px', ''));
+				wrapper.css({top : (top - TILE_SIZE) + 'px'});
+				pressed = true;
+			}
+			if(pressed){
+				loadNewTiles(true);
+				setLocationCoord();
+			}
+		}
+	});
+	
+	var lastX;
+	var lastY;
+	var click = false;
+	if(full){
+		layer.bind('mousedown touchstart', function(event){
+			if(!lock){
+				click = true;
+				layer.addClass('layer-draging')
+				$('.drop-list').hide();
+				lastX = event.screenX;
+				lastY = event.screenY;
+				event.preventDefault();  
+				var orig = event.originalEvent; 
+				if(orig.changedTouches){
+					lastX = orig.changedTouches[0].screenX;  
+					lastY = orig.changedTouches[0].screenY;  
+				}
+			}
+		});
+	
+		$(window).bind('mouseup touchend', function(event){
+			if(full){
+				click = false;
+				layer.removeClass('layer-draging')
+				setLocationCoord();
+			}
+			loadNewTiles(true);
+		});
+	
+		$(window).bind('mousemove touchmove', function(event){
+			event.preventDefault();  
+			var orig = event.originalEvent; 
+			if(click){
+				if(lastY && lastY){
+					var left = wrapper.css('left').replace('px', '');
+					var top = wrapper.css('top').replace('px', '');
+					if(orig.changedTouches){
+						wrapper.css({
+								left : Math.ceil(left - (lastX - orig.changedTouches[0].screenX)) + 'px', 
+								top : Math.ceil(top - (lastY - orig.changedTouches[0].screenY)) + 'px'
+							});
+					}
+					else{
+						wrapper.css({
+								left : Math.ceil(left - (lastX - event.screenX)) + 'px', 
+								top : Math.ceil(top - (lastY - event.screenY)) + 'px'
+							});
+					}
+					loadNewTiles(false);
+				}
+				lastX = event.screenX;
+				lastY = event.screenY;
+				if(orig.changedTouches){
+					lastX = orig.changedTouches[0].screenX;  
+					lastY = orig.changedTouches[0].screenY;  
+				}
+			}
+			if(!orig.changedTouches){
+				var coords = getCoords(event);
+				coordinates.html('x : ' + coords.x + ' z : ' + coords.y);
+			}
+		});
+	}
+	
+	var c = window.location.toString().indexOf('#');
+	if(c > 0){
+		var coo = window.location.toString().substring(c + 1).split('/');
+		//console.log(coo[0] + ' ' + coo[1] + ' ' + coo[2] + ' ' + coo[3] + ' ' + coo[4] );
+		if(coo[0] && coo[1]){
+			server = Number(coo[2]);
+			worldDim = Number(coo[3]);
+			world = Number(coo[4]);
+			var markerFlag = false;
+			if(Number(coo[0]) != 0 && Number(coo[1]) != 0){
+				markerFlag = true;
+			}
+			setTimeout(function(){
+				setCenter(Number(coo[0]), Number(coo[1]), markerFlag);
+			}, 150);
+		}
+	}
+	
+
+	var timer;
+	var lastCoords;
+	$(wrapper).bind("mousemove", function(event){
+		if(zonesTiles && !lock){
+			if(timer){
+				clearTimeout(timer);
+			}
+			var coords = getCoords(event);
+			if(lastCoords && (lastCoords.x > coords.x + 10 || lastCoords.x < coords.x - 10 || lastCoords.y > coords.y + 10 || lastCoords.y < coords.y - 10))
+				popup.hide();
+			timer = setTimeout(function(){
+				$.get('/zoneinfo/?w=' + world + '&x=' + coords.x + '&y=' + coords.y, function(data){
+					if(data){
+						data = MD32.decode(data);
+						lastCoords = coords;
+						popup.css({
+							top : (coords.x + TILE_SIZE / 2 + 30) + 'px', 
+							left : (0 - coords.y + TILE_SIZE / 2 + 18) + 'px'
+						});
+						popup.show();
+						var zones = eval(data);
+						var zone = zones[0];
+						var type = "ui-city";
+						var name = "Город";
+						if(zone.type == 1){
+							type = "ui-home";
+							name = "Дом";
+						}
+						else if(zone.type == 2){
+							type = "ui-object";
+							name = "Объект";
+						}
+						var html = zone.owner ? "<div class='ui-zone-type " + type + "'>Владелец: " + zone.owner + "</div>" : "<div class='ui-zone-type " + type + "'>" + name + "</div>";
+						html += zone.info ? "Название: " + zone.info + "<br/>" : "";
+						html += zone.created ? "Создано: " + zone.created + "<br/>" : "";
+						html += zone.size ? "Размеры: " + zone.size + "<br/>" : "";
+						if(!html)
+							html = "Данные о зоне недоступны";
+						popup.html(html);
+					}
+				});
+			}, 500);
+		}
+	});
+	$(wrapper).bind("mouseout", function(event){
+		if(timer){
+			clearTimeout(timer);
+			timer = null;
+			popup.hide();
+		}
+	});
+	
+}
+
+function fromPixelToCoords(x, y){
+	var coords = {
+		x : Math.ceil(y - TILE_SIZE / 2),
+		y : Math.ceil(0 - x + TILE_SIZE - TILE_SIZE / 2)
+	}
+	return coords;
+}
+
+function getCoords(event){
+	var left = Number(wrapper.css('left').replace('px', ''));
+	var top = Number(wrapper.css('top').replace('px', ''));
+	var coords = {
+		x : Math.ceil(event.clientY - top - TILE_SIZE / 2),
+		y : Math.ceil(0 - event.clientX + left + TILE_SIZE / 2)
+	}
+	return coords;
+}
+
+function setLocationCoord(){
+	if(!lock){
+		var left = Number(wrapper.css('left').replace('px', ''));
+		var top = Number(wrapper.css('top').replace('px', ''));
+
+		var url = window.location.toString().substr(0, window.location.toString().indexOf('#'));
+		window.location = url + '#' +  Math.ceil(map.height() / 2 - top - TILE_SIZE / 2) + '/' 
+							+  Math.ceil(0 - map.width() / 2 + left + TILE_SIZE / 2) + '/'
+							+ server + '/' 
+							+ worldDim + '/'
+							+ world + '/';
+	}
+}
+
+function loadNewTiles(loadZones){
+	var width = layer.width() + TILE_SIZE;
+	var height = layer.height() + TILE_SIZE;
+
+	var left = Number(wrapper.css('left').replace('px', ''));
+	var top = Number(wrapper.css('top').replace('px', ''));
+
+	var x = Math.ceil((0 - left - TILE_SIZE) / TILE_SIZE);
+	var y = Math.ceil((0 - top - TILE_SIZE) / TILE_SIZE);
+
+	var maxx = x + Math.ceil(width / TILE_SIZE);
+	var maxy = y + Math.ceil(height / TILE_SIZE);
+	
+	for(var i=x; i<maxx;i++){
+		for(var j=y;j<maxy; j++){
+			if(!tiles[i + '' + j]){
+				tiles[i + '' + j] = true;
+				getTile(i, j);
+			}
+		}
+	}
+	
+	if(loadZones){
+		setTimeout(function(){
+			loadNewZones();
+		}, 1000);
+	}
+}
+
+function clickRoad(event, obj){
+	if(selectedRange){
+		selectedRange.removeClass('selected-range');
+	}
+	selectedRange = $(obj);
+	selectedRange.addClass('selected-range');
+	$.get('/road/' + selectedRange.attr('rel'), function(data){
+		var road = eval(data);
+		
+		var html = '';
+		html += 'Название: ' + road.info + '<br/><br/>';
+		
+		showDesc(html);
+		
+		$('#ui-more .peoples .ui-more-title a').bind('click', function(){
+			$(this).parent().next().slideToggle('fast');
+			showPeoples = !showPeoples;
+			return false;
+		});
+		
+		if(user.group == 'admins'){
+			addMoreUiElement('desc', '<div class="ui-block"><a href="#" class="button" id="remove-zone">Удалить</a></div>')
+			var button = moreUi.find('#remove-zone');
+			button.bind('click', function(){
+				$.get('/roads/' + road.id + '/delete', function(data){
+					if(data == 1){
+						selectedRange.remove();
+						showDesc('');
+					}
+				});
+				return false;
+			});
+			var show = showTools ? 'block' : 'none';
+			addMoreUiElement('desc', '<div class="ui-move-zone"><div class="ui-more-title"><a href="#">Инструменты:</a></div><div class="ui-hidden" style="display: ' + show + '">' +
+				'<div class="title">Положение</div>' + 
+				'<div class="ui-block up-arrow"><a id="ui-arrow-up" href="#" class="arrow-button button">&uarr;</a></div>' + 
+				'<div class="ui-block left-arrow""><a id="ui-arrow-left" href="#" class="arrow-button button">&larr;</a></div>' +
+				'<div class="ui-block down-arrow""><a id="ui-arrow-down" href="#" class="arrow-button button">&darr;</a></div>' +
+				'<div class="ui-block right-arrow""><a id="ui-arrow-right" href="#" class="arrow-button button">&rarr;</a></div>' +
+				'<div class="title">Размеры</div>' +
+				'<div class="height-label ui-label">В</div>' +
+				'<div class="ui-block height-plus"><a id="ui-height-plus" href="#" class="size-button button">+</a></div>' + 
+				'<div class="ui-block height-minus""><a id="ui-height-minus" href="#" class="size-button button">-</a></div>' +
+				'<div class="width-label ui-label">Ш</div>' +
+				'<div class="ui-block width-plus""><a id="ui-width-plus" href="#" class="size-button button">+</a></div>' +
+				'<div class="ui-block width-minus""><a id="ui-width-minus" href="#" class="size-button button">-</a></div>' +
+				'</div></div>');
+			
+			$('#ui-more .ui-move-zone .ui-more-title a').bind('click', function(){
+				$(this).parent().next().slideToggle('fast');
+				showTools = !showTools;
+				return false;
+			});
+		
+		
+			moreUi.find('.ui-move-zone .arrow-button ').bind('click', function(){
+				var action = $(this).attr('id').replace('ui-arrow-', '');
+				$.get('/roads/' + road.id + '/' + action, function(data){
+					if(data != 0){
+						var top = Number(selectedRange.css('top').replace('px', ''));
+						var left = Number(selectedRange.css('left').replace('px', ''));
+						console.log(data);
+						switch (action){
+							case 'up':
+								selectedRange.css('top', (top - Number(data)) + 'px');
+								break;
+							case 'down':
+								selectedRange.css('top', (top + Number(data)) + 'px');
+								break;
+							case 'left':
+								selectedRange.css('left', (left - Number(data)) + 'px');
+								break;
+							case 'right':
+								selectedRange.css('left', (left + Number(data)) + 'px');
+								break;
+						}
+					}
+				});
+				return false;
+			});
+			
+			moreUi.find('.ui-move-zone .size-button ').bind('click', function(){
+				var action = $(this).attr('id').replace('ui-', '').replace('-', '');
+				$.get('/roads/' + road.id + '/' + action, function(data){
+					if(data != 0){
+						var top = Number(selectedRange.css('top').replace('px', ''));
+						var left = Number(selectedRange.css('left').replace('px', ''));
+						switch (action){
+							case 'heightplus':
+								selectedRange.css('top', top - Number(data) + 'px');
+								selectedRange.height(selectedRange.height() + Number(data));
+								break;
+							case 'heightminus':
+								selectedRange.height(selectedRange.height() - Number(data));
+								selectedRange.css('top', top + Number(data) + 'px');
+								break;
+							case 'widthplus':
+								selectedRange.css('left', left - Number(data) + 'px');
+								selectedRange.width(selectedRange.width() + Number(data));
+								break;
+							case 'widthminus':
+								selectedRange.css('left', left + Number(data) + 'px');
+								selectedRange.width(selectedRange.width() - Number(data));
+								break;
+						}
+					}
+				});
+				return false;
+			});
+		}
+	});
+
+	return false;
+}
+
+function loadRoads(layer){
+	clearLayer(layer);
+	loader.show();
+	$.get('http://map.minecraft-galaxy.ru/roads/' + world, function(data){
+		var a = eval(data);
+		var div = '';
+		for(var i=0;i<a.length;i++){
+			div += createRange(a[i], "road", "clickRoad(event, this);");
+		}
+		
+		$('#layer' + layer).append(div);
+		loader.hide();
+	});
+}
+
+function loadNewZones(){
+
+	var width = layer.width() + TILE_SIZE;
+	var height = layer.height() + TILE_SIZE;
+
+	var left = Number(wrapper.css('left').replace('px', ''));
+	var top = Number(wrapper.css('top').replace('px', ''));
+	
+	var x = 0 - (Math.round((0 - left) / TILE_SIZE)) * TILE_SIZE + TILE_SIZE;
+	var y = (Math.round((0 - top - TILE_SIZE) / TILE_SIZE )) * TILE_SIZE;
+	var x1 = (Math.round((x - width) / TILE_SIZE)) * TILE_SIZE;
+	var y2 = (Math.round((y + height) / TILE_SIZE)) * TILE_SIZE;
+
+	if(loadLayers && (!lastCoord || lastCoord.ls=='' 
+						|| lastCoord.x - TILE_SIZE >= x || lastCoord.y - TILE_SIZE >= y
+						|| lastCoord.w + TILE_SIZE <= x1 || lastCoord.h + TILE_SIZE <= y2)){
+
+		var layersStr = '';
+		for(var key in activeLayers){
+			if(activeLayers[key]){
+				layersStr += key + '|';
+			}
+		}
+
+		if(wait){
+			wait = false;
+			loader.show();
+			var serverCache = server;
+			var worldCache = world;
+			//showDesc('');
+			if(selectedRange){
+				selectedRange.removeClass('selected-range');
+			}
+			$.get('//map.minecraft-galaxy.ru/zones/' + world + '?lt=' + layersStr + '&x1=' + y + '&z1=' + x1 + '&x2=' + y2 + '&z2=' + x, function(data){
+				//removeMoreUiElement('desc');
+				selectedRange = null;
+				wait = true;
+				loader.hide();
+				//Если за время загрузки сервер или мир успели поменяться
+				//перезагружаем зоны еще раз
+				if(serverCache == server && worldCache == world){
+					var a = data ? JSON.parse(data) : {};
+					//картинки и биомы создаются по другим шаблонам
+					if(a.scr){
+						makePictures(a.scr);
+					}
+					if(a.biome){
+						makeBiomes(a.biome);
+					}
+					makeLayers(a);
+				}
+				else{
+					reloadTiles(true);
+				}
+			});
+		}
+		lastCoord = {};
+		lastCoord.ls = layersStr;
+		lastCoord.x = x;
+		lastCoord.y = y;
+		lastCoord.w = x1;
+		lastCoord.h = y2;
+	}
+}
+var currImg;
+function makePictures(scr){
+	clearLayer(3);
+	for(var i=0;i<scr.length;i++){
+		var item = scr[i];
+		var div = document.createElement('div');
+		$(div).css({left : (0 - item.z + TILE_SIZE / 2), top : (item.x + TILE_SIZE / 2)});
+		$(div).addClass('range').addClass('picture');
+		$(div).attr('name', item.name).attr('user', item.login);
+		$(div).attr('picid', item.id);
+		$('#layer3').append(div);
+		$(div).bind('click', function(){
+			currImg = $(this);
+			var img = 'http://map.minecraft-galaxy.ru/png/' + $(this).attr('user') + '/' + $(this).attr('name') + '.jpg';
+			$('#lightbox').html('<div class="light-block"><img src="' + img +'" alt=""/></div>');
+			$('#lightbox .light-block').css({ 
+				left : '50px',
+				top : '50px'
+			});
+			$('#lightbox img').hide();
+			$('#lightbox img').bind('load', function(){
+				var image = $(this);
+				var body = $('body');
+				var width = body.width() - 150 > image.width() ? image.width() : body.width() - 150;
+				var height = body.height() - 150 > image.height() ? image.height() : body.height() - 150;
+
+				image.height(height);
+				width = image.width();
+
+				if(width > body.width() - 150){
+					width = body.width() - 150;
+					image.width(width);
+					image.height('');
+					height = image.height();
+				}
+
+				$('#lightbox .light-block').css({ 
+					width : width + 'px',
+					height : height + 'px'
+				});
+				image.show();
+				
+			});
+			
+			if(user && user.group == 'admins'){
+				$('#lightbox .light-block').append('<div class="ui-del-pic"><a href="#" onclick="delPic();return false;">удалить</a></div>');
+			}
+			
+			$('#lightbox').show();
+			$('#back-light').show();
+			$('#back-light, #lightbox img').bind('click', function(){
+				$('#lightbox').hide();
+				$('#back-light').hide();
+			});
+		});
+	}
+}
+
+function makeBiomes(scr){
+	clearLayer(4);
+	
+	for(var i=0;i<scr.length;i++){
+		var item = scr[i];
+		var div = document.createElement('div');
+		$(div).css({left : (0 - item.z + TILE_SIZE / 2), top : (item.x + TILE_SIZE / 2)});
+		$(div).addClass('biome').addClass('biome-' + item.name);
+		
+		$('#layer4').append(div);
+	}
+}
+
+function makeLayers(a){
+	//var date = (new Date()).getTime();
+	var waipLayer = $('#layer44')
+	for(var j=0;j<=layersList.length;j++){
+		var list = new Array();
+		var className = '';
+		if(j==0 && a.citys){
+			list = a.citys;
+			className = 'city';
+		}
+		else if(j==1 && a.objs){
+			list = a.objs;
+			className = 'object';
+		}
+		else if(j==2 && a.homes){
+			list = a.homes;
+			className = 'home';
+		}
+		else if(j==5 && a.autowaip){
+			list = a.autowaip;
+			className = 'autowipe';
+		}
+		//доп слой с вайпами
+		else if(j==layersList.length && a.waip){
+			list = a.waip;
+			className = 'waip';
+		}
+		if(className != ''){
+			if(j==layersList.length && a.waip)
+				clearLayer('44');
+			else
+				clearLayer(j);
+			var layer = $('#layer' + j);
+			var div = '';
+			for(var i=0;i<list.length;i++){
+				var item = list[i];
+				if(item){
+					div += createRange(item, className, "rangeClick(event, this);");
+				}
+			}
+			if(j==layersList.length){
+				waipLayer.append(div);
+			}
+			else{
+				layer.append(div);
+			}
+		}
+	}
+	//console.log((new Date()).getTime() - date);
+}
+
+function createRange(item, className, clickFunc){
+	var left = (0 - item.z + TILE_SIZE / 2 - item.w);
+	var top = (item.x + TILE_SIZE / 2 - item.h);
+	var div = '<div onclick="' + clickFunc + '" onmouseout="rangeMouseOut();" onmouseover="rangeMouseEnter(this);"';
+	div += 'style="left: ' + left + 'px; top: ' + top + 'px;'
+	if(className!='waip'){
+		var delta = server == 22 ? 2 : 1;
+		
+		div += 'width: ' + (item.w * 2 - delta) + 'px; height: ' + (item.h * 2 - delta) + 'px;';
+	}
+	else{
+		waipCache[left + '' + top] = true;
+	}
+	
+	var old = item.old==1 ? 'old ' :  ''; 
+	div += '" class="range ' + old + className + '" info="' + item.info + 
+		'" owner="' + item.owner + '" size="' + item.w * 2 + ' x ' + item.h * 2 + '" x="' + item.x + 
+		'" y="' + item.y + '" z="' + item.z + '" rel="' + item.id + '"></div>';
+	return div;
+}
+
+var selectedRange;
+var showPeoples = false;
+var showTools = false;
+function rangeClick(event, obj){
+	event = event ? event : window.event;
+	if(event.altKey){
+		$(obj).remove();
+		popup.hide();
+	}
+	else{
+		if(selectedRange){
+			selectedRange.removeClass('selected-range');
+		}
+		selectedRange = $(obj);
+		selectedRange.addClass('selected-range');
+		$.get('/zone/' + selectedRange.attr('rel'), function(data){
+			var zone = eval(data);
+			var userName = zone.owner;
+			if(user.id != 209 &&  zone.user_id){
+				userName = '<a href="http://forum.minecraft-galaxy.ru/profilemain/' + zone.user_id + '" target="profile" class="' + zone.group + '">' + 
+							zone.owner + '</a>';
+			}
+			var html = '<div class="desc-ui" rel="' + zone.id + '">'  + ' ID: <a href="http://forum.minecraft-galaxy.ru/zoneinfo/' + zone.id + '" target="profile">' + zone.id + '</a><br/>'
+			html += 'Владелец: ' + userName + '<br/>';
+			
+			if(zone.info.indexOf('Создано') == 0){
+				html += zone.info + '<br/>';
+			}
+			else{
+				html += 'Название: ' + zone.info + '<br/>';
+			}
+			html += 'Посещение: <br/>' + zone.use + '<br/>';
+			if(user.group == 'admins'){
+				html += 'Отсутствие: ' + Math.round(zone.diff / (3600 * 24)) + 'д</div>';
+			}
+			if(zone.users.length > 0){
+				html += '<div class="peoples">';
+				var show = showPeoples ? 'block' : 'none';
+				html += '<div class="ui-more-title"><a href="#">Прописаны:</a></div><div class="ui-hidden" style="display: ' + show + '">';
+				for(var i=0; i<zone.users.length; i++){
+					var u = zone.users[i];
+					html += '<div class="ui-item"><a target="profile" href="http://forum.minecraft-galaxy.ru/profilemain/' + u.user + '" class="' + u.group + '">' + u.name + '</a></div>';
+				}
+				html += '</div></div>';
+			}
+			showDesc(html);
+			
+			$('#ui-more .peoples .ui-more-title a').bind('click', function(){
+				$(this).parent().next().slideToggle('fast');
+				showPeoples = !showPeoples;
+				return false;
+			});
+			
+			if(zone.candelete == 1){
+				addMoreUiElement('desc', '<div class="ui-block"><a href="#" class="button" id="remove-zone">Удалить</a></div>')
+				var button = moreUi.find('#remove-zone');
+				button.bind('click', function(){
+					$.get('/zones/' + zone.id + '/delete', function(data){
+						if(data == 1){
+							selectedRange.remove();
+							showDesc('');
+						}
+					});
+					return false;
+				});
+				var show = showTools ? 'block' : 'none';
+				addMoreUiElement('desc', '<div class="ui-move-zone"><div class="ui-more-title"><a href="#">Инструменты:</a></div><div class="ui-hidden" style="display: ' + show + '">' +
+					'<div class="title">Положение</div>' + 
+					'<div class="ui-block up-arrow"><a id="ui-arrow-up" href="#" class="arrow-button button">&uarr;</a></div>' + 
+					'<div class="ui-block left-arrow""><a id="ui-arrow-left" href="#" class="arrow-button button">&larr;</a></div>' +
+					'<div class="ui-block down-arrow""><a id="ui-arrow-down" href="#" class="arrow-button button">&darr;</a></div>' +
+					'<div class="ui-block right-arrow""><a id="ui-arrow-right" href="#" class="arrow-button button">&rarr;</a></div>' +
+					'<div class="title">Размеры</div>' +
+					'<div class="height-label ui-label">В</div>' +
+					'<div class="ui-block height-plus"><a id="ui-height-plus" href="#" class="size-button button">+</a></div>' + 
+					'<div class="ui-block height-minus""><a id="ui-height-minus" href="#" class="size-button button">-</a></div>' +
+					'<div class="width-label ui-label">Ш</div>' +
+					'<div class="ui-block width-plus""><a id="ui-width-plus" href="#" class="size-button button">+</a></div>' +
+					'<div class="ui-block width-minus""><a id="ui-width-minus" href="#" class="size-button button">-</a></div>' +
+					'</div></div>');
+				
+				$('#ui-more .ui-move-zone .ui-more-title a').bind('click', function(){
+					$(this).parent().next().slideToggle('fast');
+					showTools = !showTools;
+					return false;
+				});
+			
+			
+				moreUi.find('.ui-move-zone .arrow-button ').bind('click', function(){
+					var action = $(this).attr('id').replace('ui-arrow-', '');
+					$.get('/zones/' + zone.id + '/' + action, function(data){
+						if(data != 0){
+							var top = Number(selectedRange.css('top').replace('px', ''));
+							var left = Number(selectedRange.css('left').replace('px', ''));
+							console.log(data);
+							switch (action){
+								case 'up':
+									selectedRange.css('top', (top - Number(data)) + 'px');
+									break;
+								case 'down':
+									selectedRange.css('top', (top + Number(data)) + 'px');
+									break;
+								case 'left':
+									selectedRange.css('left', (left - Number(data)) + 'px');
+									break;
+								case 'right':
+									selectedRange.css('left', (left + Number(data)) + 'px');
+									break;
+							}
+						}
+					});
+					return false;
+				});
+				
+				var unlockResize = true;
+				moreUi.find('.ui-move-zone .size-button ').bind('click', function(){
+					var action = $(this).attr('id').replace('ui-', '').replace('-', '');
+					if(unlockResize){
+						unlockResize = false;
+						$.get('/zones/' + zone.id + '/' + action, function(data){
+							if(data != 0){
+								var top = Number(selectedRange.css('top').replace('px', ''));
+								var left = Number(selectedRange.css('left').replace('px', ''));
+								switch (action){
+									case 'heightplus':
+										//selectedRange.css('top', top - Number(data) + 'px');
+										selectedRange.height(selectedRange.height() + 2*data);
+										break;
+									case 'heightminus':
+										selectedRange.height(selectedRange.height() - 2*data);
+										//selectedRange.css('top', top + Number(data) + 'px');
+										break;
+									case 'widthplus':
+										//selectedRange.css('left', left - Number(data) + 'px');
+										selectedRange.width(selectedRange.width() + 2*data);
+										break;
+									case 'widthminus':
+										//selectedRange.css('left', left + Number(data) + 'px');
+										selectedRange.width(selectedRange.width() - 2*data);
+										break;
+								}
+							}
+							unlockResize = true;
+					});
+					}
+					return false;
+				});
+			}
+		});
+
+	}
+	return false;
+}
+
+function rangeMouseOut(){
+	if(helpTimeout){
+		clearTimeout(helpTimeout);
+		helpTimeout = null;
+	}
+	notHidePopup = false;
+	popup.hide();
+}
+
+function rangeMouseEnter(obj){
+	showRangeInfo($(obj));
+}
+
+function showDesc(html){
+	if(moreUi){
+		var descUi = moreUi.find('.desc');
+		if(descUi.length > 0){
+			descUi.html('');
+		}
+		addMoreUiElement('desc', html);
+	}
+}
+
+function showRangeInfo(range){
+	if(!helpTimeout){
+		helpTimeout = setTimeout(function(){
+			var str = '';
+			if(range.attr('info').indexOf('Создано')==0){
+				str += range.attr('info');
+			}
+			else if(range.attr('info')){
+				str += 'Название: ' + range.attr('info');
+			}
+			else{
+				str += 'Название: ---';
+			}
+			if(range.attr('owner')){
+				str	+= '<br/>Владелец: ' + range.attr('owner');
+			}
+			str += '<br/>Размеры: ' + range.attr('size');
+			str += '<br/>Координаты: x: ' + range.attr('x') + ' y: ' + range.attr('y') + ' z: ' + range.attr('z');
+			popup.html(str);
+			popup.css({
+				left : Number(range.css('left').replace('px', '')) + range.width() + 'px',
+				top : Number(range.css('top').replace('px', '')) + range.height() + 'px'
+			});
+			notHidePopup = true;
+			popup.show();
+		}, 100);
+	}
+}
+
+function getTile(x, y){
+	var w = x * TILE_SIZE;
+	var h = y * TILE_SIZE;
+	var div = document.createElement('div');
+	server = server ? server : 1;
+	$(div).addClass('map-item');
+	$(div).append('<div class="greed"></div>');
+	var img;
+	if(x > (0 - MAP_SIZE) && x < MAP_SIZE && y > (0 - MAP_SIZE) && y < MAP_SIZE){
+		img  = '<img ondrag="return false" ondragdrop="return false" ondragstart="return false" src="%s" alt=""/>';
+		//img = 'url(%s) no-repeat';
+		
+		if(worldDim == 0 && dayNightToggle == 'night'){
+			img  = img.replace('%s', '//map.minecraft-galaxy.ru/maps/'  + server + '/map-' + dayNightToggle + '/map_' + h + '_'  + (0 - w) + '.png');
+		}
+		else if(zonesTiles && worldDim > -1){
+			//img  = img.replace('%s', '//map.minecraft-galaxy.ru/layers/'  + server + '/' + world + '/lr_' + h + '_'  + (0 - w) + '.png');
+			img  = img.replace('%s', '//map.minecraft-galaxy.ru/layer/'  + server + '/' + world + '/' + worldDim + '/' + h + '/' + (0 - w) + '/map.png');
+		}
+		else{
+			if(worldDim == 0){
+				img  = img.replace('%s', '//map.minecraft-galaxy.ru/maps/'  + server + '/map-' + dayNightToggle + '/map_' + h + '_'  + (0 - w) + '.png');
+			}
+			else{
+				img  = img.replace('%s', '//map.minecraft-galaxy.ru/maps/'  + server + '/map-' + worldDim + '/map_' + h + '_'  + (0 - w) + '.png');
+			}
+		}
+		
+	}
+	if(img){
+		$(div).append(img);
+		//$(div).css('background', img);
+	}
+	if(zonesTiles && worldDim > -1){
+		//TODO загрузка инфы по зоне
+		var lastX;
+		var lastY;
+		$(div).bind("mousedown touchstart", function(event){
+			lastX = event.screenX;
+			lastY = event.screenY;
+			event.preventDefault();  
+			var orig = event.originalEvent; 
+			if(orig.changedTouches){
+				lastX = orig.changedTouches[0].screenX;  
+				lastY = orig.changedTouches[0].screenY;  
+			}
+		});
+		
+		$(div).bind("mouseup touchend", function(event){
+			if(!lock){
+				newX = event.screenX;
+				newY = event.screenY;
+				event.preventDefault();  
+				var orig = event.originalEvent; 
+				if(orig.changedTouches){
+					newX = orig.changedTouches[0].screenX;  
+					newY = orig.changedTouches[0].screenY;  
+				}
+				
+				if(lastX > newX + 2 || lastX < newX - 2 || lastY > newY + 2 || lastY < newY - 2)
+					return;
+				
+				var coords = getCoords(event);
+				showDesc('Загрузка...');
+				addArrowMarker(coords.x, coords.y);
+				$.get('/zoneinfo/?w=' + world + '&x=' + coords.x + '&y=' + coords.y, function(data){
+					if(data){
+						data = MD32.decode(data);
+						var zones = eval(data);
+						makeDesc(zones);
+					}
+					else{
+						showDesc('x : ' + coords.x + ' z : ' + coords.y);
+					}
+				});
+			}
+		});
+		
+	}
+	$(div).css({left:w, top:h});
+	tilesWrap.append(div);
+}
+
+function makeDesc(zones){
+	var html = "";
+	$.each(zones, function(index, zone){
+		/*if(zones.length > 1){
+			html += '<div class="zone-info"><div class="ui-more-title"><a href="#">Зона ' + (index + 1) + '</a></div><div class="ui-hidden" style="display: hidden">';
+		}*/
+		var userName = zone.owner;
+		if(user.id != 209 &&  zone.user_id){
+			userName = '<a href="http://forum.minecraft-galaxy.ru/profilemain/' + zone.user_id + '" target="profile" class="' + zone.group + '">' + 
+						zone.owner + '</a>';
+		}
+		html += '<div class="desc-ui" rel="' + (zone.id ? zone.id : "") + '">';
+		if(zone.type == 1){
+			html += '<div class="ui-zone-type ui-home">Дом</div>';
+		}
+		else if(zone.type == 2){
+			html += '<div class="ui-zone-type ui-object">Объект</div>';
+		}
+		else if(zone.type == 3){
+			html += '<div class="ui-zone-type ui-city">Город</div>';
+		}
+		html += zone.info ? 'Название: ' + zone.info + '<br/>' : '';
+		html += zone.id ?   ' ID: <a href="http://forum.minecraft-galaxy.ru/zoneinfo/' + zone.id + '" target="profile">' + zone.id + '</a><br/>' : '';
+		html += userName ? 'Владелец: ' + userName + '<br/>' : '';
+		html += 'Размеры: ' + zone.size + '<br/>';
+		html += zone.center ? 'Центр: ' + zone.center + '<br/>' : "";
+		
+		html += zone.created ? 'Создано: <br/>' + zone.created + '<br/>' : '';
+		html += 'Посещение: <br/>' + zone.use + '<br/>';
+		if(user.group == 'admins'){
+			html += 'Отсутствие: ' + Math.round(zone.diff / (3600 * 24)) + 'д';
+		}
+		html += "</div>";
+		if(zone.users.length > 0){
+			html += '<div class="peoples">';
+			var show = showPeoples ? 'block' : 'none';
+			html += '<div class="ui-more-title"><a href="#">Прописаны:</a></div><div class="ui-hidden" style="display: ' + show + '">';
+			for(var i=0; i<zone.users.length; i++){
+				var u = zone.users[i];
+				html += '<div class="ui-item"><a target="profile" href="http://forum.minecraft-galaxy.ru/profilemain/' + u.user + '" class="' + u.group + '">' + u.name + '</a></div>';
+			}
+			html += '</div></div>';
+		}
+		/*if(zones.length > 1){
+			html += '</div></div>';
+		}*/
+	});
+	
+	showDesc(html);
+	$('#ui-more .peoples .ui-more-title a').bind('click', function(){
+		$(this).parent().next().slideToggle('fast');
+		showPeoples = !showPeoples;
+		return false;
+	});
+	$('#ui-more .zone-info .ui-more-title a').bind('click', function(){
+		$(this).parent().next().slideToggle('fast');
+		return false;
+	});
+	/*if(zone.candelete == 1){
+		addMoreUiElement('desc', '<div class="ui-block"><a href="#" class="button" id="remove-zone">Удалить</a></div>')
+		var button = moreUi.find('#remove-zone');
+		button.bind('click', function(){
+			$.get('/zones/' + zone.id + '/delete', function(data){
+				if(data == 1){
+					selectedRange.remove();
+					showDesc('');
+				}
+			});
+			return false;
+		});
+	}*/
+}
+
+function setCenter(x, y, marker){
+	wrapper.css({
+		top: Math.ceil((0 - (x + TILE_SIZE / 2)) + layer.height() / 2) + 'px', 
+		left : Math.ceil((0 - (0 - y + TILE_SIZE / 2)) + layer.width() / 2) + 'px'
+	});
+	if(marker){
+		addArrowMarker(x, y);
+	}
+	setLocationCoord();
+	loadNewTiles(true);
+}
+
+function addArrowMarker(x, y){
+	var div = document.createElement('div');
+	$(div).addClass('arrow-marker');
+	$(div).css({
+		top : (x + TILE_SIZE / 2 - 50) + 'px', 
+		left : (0 - y + TILE_SIZE / 2 - 18) + 'px'
+	});
+	$(div).bind('click', function(){
+		$(this).remove();
+		return false;
+	});
+	markerLayer.html(div);
+}
+
+function addMarker(u){
+	var div = document.createElement('div');
+	$(div).addClass('player');
+	if(u.pk > 0){
+		$(div).addClass('pk');
+	}
+	$(div).attr('desc', 'x: ' + u.x + ' y: ' + u.y + ' z: ' + u.z);
+	$(div).attr('name', u.name).attr('rel', u.id);
+	$(div).css({
+		top : (u.x + TILE_SIZE / 2 - 3) + 'px', 
+		left : (0 - u.z + TILE_SIZE / 2 - 3) + 'px'
+	});
+	
+	$(div).bind('mouseout', function(){
+		if(helpTimeout){
+			clearTimeout(helpTimeout);
+			helpTimeout = null;
+		}
+		popup.hide();
+	});
+	
+	$(div).bind('mouseenter', function(){
+		var marker = $(this);
+		helpTimeout = setTimeout(function(){
+			popup.html(marker.attr('name') + '<br/>' + marker.attr('desc'));
+			popup.css({
+				left : Number(marker.css('left').replace('px', '')) + 16 + 'px',
+				top : Number(marker.css('top').replace('px', '')) + 16 + 'px'
+			});
+			popup.show();
+		}, 100);
+	});
+	
+	$(div).bind('click', function(){
+		showUser($(this).attr('rel'));
+		return false;
+	});
+	
+	$('#player-markers').append(div);
+}
+
+function setCookie(name, value, expires, path, domain, secure) {
+    if (!name || !value) return false;
+    var str = name + '=' + encodeURIComponent(value);
+    if (expires) {
+		str += '; expires=' + expires.toGMTString();
+	}
+	else{
+		str += '; expires=Mon, 01-Jan-2051 00:00:00 GMT';
+	}
+    if (path)    str += '; path=' + path;
+    if (domain)  str += '; domain=' + domain;
+    if (secure)  str += '; secure';
+    document.cookie = str;
+    return true;
+}
+
+function getCookie(name) {
+	var pattern = "(?:; )?" + name + "=([^;]*);?";
+    var regexp  = new RegExp(pattern);
+    if (regexp.test(document.cookie))
+    return decodeURIComponent(RegExp["$1"]);
+    return false;
+}
+
+
+var MD32 = {
+		 
+	// private property
+	_keyStr : "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/=",
+	 
+		// public method for encoding
+	encode : function (input) {
+		var output = "";
+			var chr1, chr2, chr3, enc1, enc2, enc3, enc4;
+			var i = 0;
+	 
+			input = MD32._utf8_encode(input);
+	 
+			while (i < input.length) {
+	 
+				chr1 = input.charCodeAt(i++);
+				chr2 = input.charCodeAt(i++);
+				chr3 = input.charCodeAt(i++);
+	 
+				enc1 = chr1 >> 2;
+				enc2 = ((chr1 & 3) << 4) | (chr2 >> 4);
+				enc3 = ((chr2 & 15) << 2) | (chr3 >> 6);
+				enc4 = chr3 & 63;
+	 
+				if (isNaN(chr2)) {
+					enc3 = enc4 = 64;
+				} else if (isNaN(chr3)) {
+					enc4 = 64;
+				}
+	 
+				output = output +
+				this._keyStr.charAt(enc1) + this._keyStr.charAt(enc2) +
+				this._keyStr.charAt(enc3) + this._keyStr.charAt(enc4);
+	 
+			}
+	 
+			return output;
+		},
+	 
+		// public method for decoding
+	decode : function (input) {
+		var output = "";
+			var chr1, chr2, chr3;
+			var enc1, enc2, enc3, enc4;
+			var i = 0;
+	 
+			input = input.replace(/[^A-Za-z0-9\+\/\=]/g, "");
+	 
+			while (i < input.length) {
+	 
+				enc1 = this._keyStr.indexOf(input.charAt(i++));
+				enc2 = this._keyStr.indexOf(input.charAt(i++));
+				enc3 = this._keyStr.indexOf(input.charAt(i++));
+				enc4 = this._keyStr.indexOf(input.charAt(i++));
+	 
+				chr1 = (enc1 << 2) | (enc2 >> 4);
+				chr2 = ((enc2 & 15) << 4) | (enc3 >> 2);
+				chr3 = ((enc3 & 3) << 6) | enc4;
+	 
+				output = output + String.fromCharCode(chr1);
+	 
+				if (enc3 != 64) {
+					output = output + String.fromCharCode(chr2);
+				}
+				if (enc4 != 64) {
+					output = output + String.fromCharCode(chr3);
+				}
+	 
+			}
+	 
+			output = MD32._utf8_decode(output);
+	 
+			return output;
+	 
+		},
+	 
+		// private method for UTF-8 encoding
+	_utf8_encode : function (string) {
+		string = string.replace(/\r\n/g,"\n");
+		var utftext = "";
+	 
+			for (var n = 0; n < string.length; n++) {
+	 
+				var c = string.charCodeAt(n);
+	 
+				if (c < 128) {
+					utftext += String.fromCharCode(c);
+				}
+				else if((c > 127) && (c < 2048)) {
+					utftext += String.fromCharCode((c >> 6) | 192);
+					utftext += String.fromCharCode((c & 63) | 128);
+				}
+				else {
+					utftext += String.fromCharCode((c >> 12) | 224);
+					utftext += String.fromCharCode(((c >> 6) & 63) | 128);
+					utftext += String.fromCharCode((c & 63) | 128);
+				}
+	 
+			}
+	 
+			return utftext;
+		},
+	 
+		// private method for UTF-8 decoding
+	_utf8_decode : function (utftext) {
+		var string = "";
+			var i = 0;
+			var c = c1 = c2 = 0;
+	 
+			while ( i < utftext.length ) {
+	 
+				c = utftext.charCodeAt(i);
+	 
+				if (c < 128) {
+					string += String.fromCharCode(c);
+					i++;
+				}
+				else if((c > 191) && (c < 224)) {
+					c2 = utftext.charCodeAt(i+1);
+					string += String.fromCharCode(((c & 31) << 6) | (c2 & 63));
+					i += 2;
+				}
+				else {
+					c2 = utftext.charCodeAt(i+1);
+					c3 = utftext.charCodeAt(i+2);
+					string += String.fromCharCode(((c & 15) << 12) | ((c2 & 63) << 6) | (c3 & 63));
+					i += 3;
+				}
+	 
+			}
+	 
+			return string;
+		}
+	 
+	}
